@@ -43,32 +43,37 @@ def config_from_env() -> dict:
 
 
 class Pool:
-    """Thin lazy wrapper over a mysql-connector pool."""
+    """Connection helper over pymysql (pure-Python — no protobuf/gRPC/C deps,
+    unlike mysql-connector). mempalace is a single low-QPS MCP child, so we
+    open a fresh autocommit connection per call: trivial overhead, and it
+    sidesteps stale-connection handling over the long-lived VCN/ZT link.
 
-    def __init__(self, cfg: dict | None = None, size: int = 4):
+    Name kept as ``Pool`` for _client/_collection compatibility.
+    """
+
+    def __init__(self, cfg: dict | None = None, **_):
         self._cfg = cfg or config_from_env()
-        self._size = size
-        self._pool = None
 
-    def _ensure(self):
-        if self._pool is None:
-            from mysql.connector import pooling  # lazy
+    def _connect(self):
+        import pymysql  # lazy — keeps the package importable for unit tests
+        from pymysql.cursors import DictCursor
 
-            self._pool = pooling.MySQLConnectionPool(
-                pool_name="mempalace", pool_size=self._size, **self._cfg
-            )
-        return self._pool
+        return pymysql.connect(
+            host=self._cfg["host"],
+            port=self._cfg["port"],
+            user=self._cfg["user"],
+            password=self._cfg["password"],
+            database=self._cfg["database"],
+            autocommit=True,
+            cursorclass=DictCursor,
+        )
 
     def execute(self, sql: str, params: list | None = None, *, fetch: bool = False):
-        conn = self._ensure().get_connection()
+        conn = self._connect()
         try:
-            cur = conn.cursor(dictionary=True)
-            cur.execute(sql, params or [])
-            rows = cur.fetchall() if fetch else None
-            if not fetch:
-                conn.commit()
-            cur.close()
-            return rows
+            with conn.cursor() as cur:
+                cur.execute(sql, params or [])
+                return cur.fetchall() if fetch else None
         finally:
             conn.close()
 

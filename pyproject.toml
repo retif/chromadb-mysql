@@ -8,12 +8,12 @@ version = "0.1.0"
 description = "Drop-in ChromaDB-API-compatible backend stored in MySQL 9 VECTOR + HeatWave ML_EMBED. A switchable extension for mempalace; standard ChromaDB stays the default."
 requires-python = ">=3.10"
 dependencies = [
-  # mysql-connector-python is required at runtime in MySQL mode; kept out of
-  # hard deps so the package imports cleanly for unit tests / the switch shim.
+  # pymysql (pure-Python driver) is required at runtime in MySQL mode; kept out
+  # of hard deps so the package imports cleanly for unit tests / the switch shim.
 ]
 
 [project.optional-dependencies]
-mysql = ["mysql-connector-python>=9.0"]
+mysql = ["pymysql>=1.1"]
 embed = ["sentence-transformers>=2.2"]
 test = ["pytest>=7"]
 
