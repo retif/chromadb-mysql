@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "chromadb-mysql-backend"
 version = "0.1.0"
-description = "Drop-in ChromaDB-API-compatible backend stored in MySQL 9 VECTOR + HeatWave ML_EMBED. A switchable extension for mempalace; standard ChromaDB stays the default."
+description = "Drop-in ChromaDB-API-compatible backend in MySQL 9 VECTOR with in-DB HeatWave ML_EMBED embeddings (active default). A switchable extension for mempalace."
 requires-python = ">=3.10"
 dependencies = [
   # pymysql (pure-Python driver) is required at runtime in MySQL mode; kept out
@@ -14,6 +14,8 @@ dependencies = [
 
 [project.optional-dependencies]
 mysql = ["pymysql>=1.1"]
+# OPTIONAL client-side fallback only (MEMPALACE_EMBED_MODE=client); the default
+# db mode embeds in HeatWave via ML_EMBED and needs neither torch nor this extra.
 embed = ["sentence-transformers>=2.2"]
 test = ["pytest>=7"]
 

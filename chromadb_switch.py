@@ -39,6 +39,12 @@ def activate() -> bool:
     if sys.modules.get("chromadb") is backend:
         return True
     sys.modules["chromadb"] = backend
+    # Register submodules so `from chromadb.errors import NotFoundError` resolves
+    # (the import machinery looks up sys.modules['chromadb.errors'], not getattr
+    # on the aliased package). mempalace imports this at module load.
+    errors_mod = importlib.import_module("chromadb_mysql_backend.errors")
+    sys.modules["chromadb.errors"] = errors_mod
+    backend.errors = errors_mod
     return True
 
 
