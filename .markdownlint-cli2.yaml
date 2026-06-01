@@ -1,0 +1,11 @@
+config:
+  line-length: false
+  no-emphasis-as-heading: false
+  no-trailing-punctuation: false
+  blanks-around-lists: false
+  fenced-code-language: false
+  table-column-style: false
+  blanks-around-headings: false
+  blanks-around-fences: false
+  blanks-around-tables: false
+  no-duplicate-heading: false
