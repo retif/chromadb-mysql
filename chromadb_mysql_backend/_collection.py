@@ -44,11 +44,14 @@ class Collection:
                     _embed.vector_to_sql(embeddings[i]),
                 ]
             )
+        # Alias form (INSERT … AS new … = new.col): the VALUES() form in the
+        # UPDATE clause is deprecated in MySQL 8.0.20+ and warns on 9.x. Verified
+        # against HeatWave 9.7.0.
         sql = (
             f"INSERT INTO `{self.name}` (id, document, metadata, embedding) "
-            "VALUES (%s, %s, %s, STRING_TO_VECTOR(%s)) "
-            "ON DUPLICATE KEY UPDATE document=VALUES(document), "
-            "metadata=VALUES(metadata), embedding=VALUES(embedding)"
+            "VALUES (%s, %s, %s, STRING_TO_VECTOR(%s)) AS new "
+            "ON DUPLICATE KEY UPDATE document=new.document, "
+            "metadata=new.metadata, embedding=new.embedding"
         )
         for row in rows:
             self._pool.execute(sql, row)
@@ -90,8 +93,14 @@ class Collection:
         rows = self._pool.execute(sql, params, fetch=True) or []
         return _shapes.build_get_result([self._row(r) for r in rows], include)
 
-    def query(self, query_texts=None, query_embeddings=None, n_results=10,
-              where=None, include=None):
+    def query(
+        self,
+        query_texts=None,
+        query_embeddings=None,
+        n_results=10,
+        where=None,
+        include=None,
+    ):
         if query_embeddings is None:
             query_embeddings = self._embed.embed(list(query_texts or []))
         clause, wparams = _where.translate(where) if where else ("", [])
