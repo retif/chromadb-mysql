@@ -40,9 +40,7 @@ def test_add_autoembeds_and_emits_upsert_sql():
 
 def test_add_explicit_embeddings_skips_embedder():
     pool, emb = FakePool(), FakeEmbedder()
-    _coll(pool, emb).add(
-        ids=["a"], documents=["hello"], embeddings=[[0.1, 0.2, 0.3]]
-    )
+    _coll(pool, emb).add(ids=["a"], documents=["hello"], embeddings=[[0.1, 0.2, 0.3]])
     assert emb.seen == []  # caller supplied embeddings → no embedding
     assert pool.last()[1][3] == _embed.vector_to_sql([0.1, 0.2, 0.3])
 
@@ -69,9 +67,7 @@ def test_upsert_uses_same_path_as_add():
 def test_get_builds_where_ids_limit_offset_and_shapes():
     rows = [{"id": "a", "document": "doc-a", "metadata": '{"wing": "infra"}'}]
     pool = FakePool(fetch_results=[rows])
-    out = _coll(pool).get(
-        ids=["a"], where={"wing": "infra"}, limit=5, offset=2
-    )
+    out = _coll(pool).get(ids=["a"], where={"wing": "infra"}, limit=5, offset=2)
     sql, params, fetch = pool.last()
     assert fetch is True
     assert "SELECT id, document, metadata FROM `mem`" in sql
