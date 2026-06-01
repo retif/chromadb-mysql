@@ -1,0 +1,38 @@
+name: release
+
+# Build the wheel + sdist and attach them to a GitHub Release on tag push.
+# (The mempalace image consumes this package from source via Nix fetchFromGitHub;
+# the wheel is the human/pip-installable distributable.)
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write # create releases + upload assets
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install build + test deps
+        run: python -m pip install --upgrade build pytest
+
+      - name: Unit tests
+        run: PYTHONPATH=. pytest -q
+
+      - name: Build wheel + sdist
+        run: python -m build
+
+      - name: Publish GitHub Release with artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
