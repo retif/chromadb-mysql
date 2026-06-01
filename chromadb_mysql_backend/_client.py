@@ -18,9 +18,13 @@ _CollectionError = NotFoundError
 
 
 class Client:
-    def __init__(self, path: str | None = None, embed_model: str | None = None,
-                 embedder: "_embed.Embedder | None" = None,
-                 pool: "_mysql.Pool | None" = None):
+    def __init__(
+        self,
+        path: str | None = None,
+        embed_model: str | None = None,
+        embedder: "_embed.Embedder | None" = None,
+        pool: "_mysql.Pool | None" = None,
+    ):
         self._path = path
         self._embed_model = embed_model or _embed.model_from_env()
         self._embedder = embedder  # optional client fallback, default None
@@ -37,8 +41,11 @@ class Client:
 
     def _collection(self, name, metadata=None):
         return Collection(
-            name, self._pool, embed_model=self._embed_model,
-            embedder=self._embedder, metadata=metadata,
+            name,
+            self._pool,
+            embed_model=self._embed_model,
+            embedder=self._embedder,
+            metadata=metadata,
         )
 
     def create_collection(self, name, metadata=None, **_):
@@ -58,9 +65,12 @@ class Client:
         self._pool.execute(f"DROP TABLE IF EXISTS `{name}`")
 
     def list_collections(self):
-        rows = self._pool.execute(
-            "SELECT table_name AS name FROM information_schema.tables "
-            "WHERE table_schema = DATABASE()",
-            fetch=True,
-        ) or []
+        rows = (
+            self._pool.execute(
+                "SELECT table_name AS name FROM information_schema.tables "
+                "WHERE table_schema = DATABASE()",
+                fetch=True,
+            )
+            or []
+        )
         return [self._collection(r["name"]) for r in rows]

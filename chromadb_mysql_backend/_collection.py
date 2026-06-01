@@ -126,8 +126,15 @@ class Collection:
         )
         return int(rows[0]["n"]) if rows else 0
 
-    def get(self, ids=None, where=None, where_document=None, include=None,
-            limit=None, offset=None):
+    def get(
+        self,
+        ids=None,
+        where=None,
+        where_document=None,
+        include=None,
+        limit=None,
+        offset=None,
+    ):
         if where_document is not None:
             raise NotImplementedError(_NO_WHERE_DOC)
         clauses, params = [], []
@@ -149,8 +156,15 @@ class Collection:
         rows = self._pool.execute(sql, params, fetch=True) or []
         return _shapes.build_get_result([self._row(r) for r in rows], include)
 
-    def query(self, query_texts=None, query_embeddings=None, n_results=10,
-              where=None, where_document=None, include=None):
+    def query(
+        self,
+        query_texts=None,
+        query_embeddings=None,
+        n_results=10,
+        where=None,
+        where_document=None,
+        include=None,
+    ):
         if where_document is not None:
             raise NotImplementedError(_NO_WHERE_DOC)
         clause, wparams = _where.translate(where) if where else ("", [])
