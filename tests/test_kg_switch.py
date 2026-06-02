@@ -27,7 +27,9 @@ def test_enabled_swaps_class_and_rebinds_consumers(monkeypatch):
     try:
         # A consumer that already did `from .knowledge_graph import KnowledgeGraph`
         consumer = types.ModuleType("mempalace.mcp_server")
-        consumer.KnowledgeGraph = sys.modules["mempalace.knowledge_graph"].KnowledgeGraph
+        consumer.KnowledgeGraph = sys.modules[
+            "mempalace.knowledge_graph"
+        ].KnowledgeGraph
         sys.modules["mempalace.mcp_server"] = consumer
 
         monkeypatch.setenv(mempalace_kg_switch.ENV_VAR, "mysql")
@@ -36,7 +38,10 @@ def test_enabled_swaps_class_and_rebinds_consumers(monkeypatch):
         from mempalace_kg_mysql import MySQLKnowledgeGraph
 
         # the module symbol is swapped
-        assert sys.modules["mempalace.knowledge_graph"].KnowledgeGraph is MySQLKnowledgeGraph
+        assert (
+            sys.modules["mempalace.knowledge_graph"].KnowledgeGraph
+            is MySQLKnowledgeGraph
+        )
         # and the already-imported consumer's local binding is rebound too
         assert consumer.KnowledgeGraph is MySQLKnowledgeGraph
         # idempotent

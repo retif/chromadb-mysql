@@ -97,7 +97,9 @@ class MySQLKnowledgeGraph:
         return _entity_id(name)
 
     # ── Write operations ──────────────────────────────────────────────────
-    def add_entity(self, name: str, entity_type: str = "unknown", properties: Optional[dict] = None):
+    def add_entity(
+        self, name: str, entity_type: str = "unknown", properties: Optional[dict] = None
+    ):
         eid = _entity_id(name)
         props = json.dumps(properties or {})
         with self._lock:
@@ -123,7 +125,9 @@ class MySQLKnowledgeGraph:
         source_drawer_id: Optional[str] = None,
         adapter_name: Optional[str] = None,
     ):
-        _temporal_start_key, _temporal_end_key, sanitize_iso_temporal = _import_helpers()
+        _temporal_start_key, _temporal_end_key, sanitize_iso_temporal = (
+            _import_helpers()
+        )
 
         valid_from = sanitize_iso_temporal(valid_from, "valid_from")
         valid_to = sanitize_iso_temporal(valid_to, "valid_to")
@@ -144,7 +148,8 @@ class MySQLKnowledgeGraph:
 
         def _do(cur):
             cur.execute(
-                "INSERT IGNORE INTO entities (id, name) VALUES (%s, %s)", (sub_id, subject)
+                "INSERT IGNORE INTO entities (id, name) VALUES (%s, %s)",
+                (sub_id, subject),
             )
             cur.execute(
                 "INSERT IGNORE INTO entities (id, name) VALUES (%s, %s)", (obj_id, obj)
@@ -186,8 +191,12 @@ class MySQLKnowledgeGraph:
         with self._lock:
             return self._store.tx(_do)
 
-    def invalidate(self, subject: str, predicate: str, obj: str, ended: Optional[str] = None):
-        _temporal_start_key, _temporal_end_key, sanitize_iso_temporal = _import_helpers()
+    def invalidate(
+        self, subject: str, predicate: str, obj: str, ended: Optional[str] = None
+    ):
+        _temporal_start_key, _temporal_end_key, sanitize_iso_temporal = (
+            _import_helpers()
+        )
         sub_id = _entity_id(subject)
         obj_id = _entity_id(obj)
         pred = predicate.lower().replace(" ", "_")
@@ -201,9 +210,9 @@ class MySQLKnowledgeGraph:
             )
             for row in cur.fetchall():
                 valid_from = row["valid_from"]
-                if valid_from is not None and _temporal_end_key(ended) < _temporal_start_key(
-                    valid_from
-                ):
+                if valid_from is not None and _temporal_end_key(
+                    ended
+                ) < _temporal_start_key(valid_from):
                     raise ValueError(
                         f"valid_to={ended!r} is before valid_from={valid_from!r}; "
                         "an inverted interval would be invisible to every KG query"
@@ -218,8 +227,12 @@ class MySQLKnowledgeGraph:
             self._store.tx(_do)
 
     # ── Query operations ──────────────────────────────────────────────────
-    def query_entity(self, name: str, as_of: Optional[str] = None, direction: str = "outgoing"):
-        _temporal_start_key, _temporal_end_key, sanitize_iso_temporal = _import_helpers()
+    def query_entity(
+        self, name: str, as_of: Optional[str] = None, direction: str = "outgoing"
+    ):
+        _temporal_start_key, _temporal_end_key, sanitize_iso_temporal = (
+            _import_helpers()
+        )
         as_of = sanitize_iso_temporal(as_of, "as_of")
         eid = _entity_id(name)
         results = []
@@ -227,13 +240,16 @@ class MySQLKnowledgeGraph:
         temporal_sql = ""
         temporal_params: list = []
         if as_of:
-            temporal_sql, temporal_params = _temporal_filter_sql(_temporal_start_key(as_of))
+            temporal_sql, temporal_params = _temporal_filter_sql(
+                _temporal_start_key(as_of)
+            )
 
         with self._lock:
             if direction in ("outgoing", "both"):
                 rows = self._store.query(
                     "SELECT t.*, e.name as obj_name FROM triples t "
-                    "JOIN entities e ON t.object = e.id WHERE t.subject = %s" + temporal_sql,
+                    "JOIN entities e ON t.object = e.id WHERE t.subject = %s"
+                    + temporal_sql,
                     [eid] + temporal_params,
                 )
                 for row in rows:
@@ -254,7 +270,8 @@ class MySQLKnowledgeGraph:
             if direction in ("incoming", "both"):
                 rows = self._store.query(
                     "SELECT t.*, e.name as sub_name FROM triples t "
-                    "JOIN entities e ON t.subject = e.id WHERE t.object = %s" + temporal_sql,
+                    "JOIN entities e ON t.subject = e.id WHERE t.object = %s"
+                    + temporal_sql,
                     [eid] + temporal_params,
                 )
                 for row in rows:
@@ -275,7 +292,9 @@ class MySQLKnowledgeGraph:
         return results
 
     def query_relationship(self, predicate: str, as_of: Optional[str] = None):
-        _temporal_start_key, _temporal_end_key, sanitize_iso_temporal = _import_helpers()
+        _temporal_start_key, _temporal_end_key, sanitize_iso_temporal = (
+            _import_helpers()
+        )
         as_of = sanitize_iso_temporal(as_of, "as_of")
         pred = predicate.lower().replace(" ", "_")
 
@@ -288,7 +307,9 @@ class MySQLKnowledgeGraph:
         )
         params: list = [pred]
         if as_of:
-            temporal_sql, temporal_params = _temporal_filter_sql(_temporal_start_key(as_of))
+            temporal_sql, temporal_params = _temporal_filter_sql(
+                _temporal_start_key(as_of)
+            )
             query += temporal_sql
             params.extend(temporal_params)
 
@@ -346,7 +367,9 @@ class MySQLKnowledgeGraph:
     # ── Stats ─────────────────────────────────────────────────────────────
     def stats(self):
         with self._lock:
-            entities = self._store.query("SELECT COUNT(*) as cnt FROM entities")[0]["cnt"]
+            entities = self._store.query("SELECT COUNT(*) as cnt FROM entities")[0][
+                "cnt"
+            ]
             triples = self._store.query("SELECT COUNT(*) as cnt FROM triples")[0]["cnt"]
             current = self._store.query(
                 "SELECT COUNT(*) as cnt FROM triples WHERE valid_to IS NULL"
@@ -376,12 +399,18 @@ class MySQLKnowledgeGraph:
             self.add_entity(
                 name,
                 etype,
-                {"gender": facts.get("gender", ""), "birthday": facts.get("birthday", "")},
+                {
+                    "gender": facts.get("gender", ""),
+                    "birthday": facts.get("birthday", ""),
+                },
             )
             parent = facts.get("parent")
             if parent:
                 self.add_triple(
-                    name, "child_of", parent.capitalize(), valid_from=facts.get("birthday")
+                    name,
+                    "child_of",
+                    parent.capitalize(),
+                    valid_from=facts.get("birthday"),
                 )
             partner = facts.get("partner")
             if partner:
@@ -395,11 +424,19 @@ class MySQLKnowledgeGraph:
                     valid_from=facts.get("birthday"),
                 )
             elif relationship == "husband":
-                self.add_triple(name, "is_partner_of", facts.get("partner", name).capitalize())
+                self.add_triple(
+                    name, "is_partner_of", facts.get("partner", name).capitalize()
+                )
             elif relationship == "brother":
-                self.add_triple(name, "is_sibling_of", facts.get("sibling", name).capitalize())
+                self.add_triple(
+                    name, "is_sibling_of", facts.get("sibling", name).capitalize()
+                )
             elif relationship == "dog":
-                self.add_triple(name, "is_pet_of", facts.get("owner", name).capitalize())
+                self.add_triple(
+                    name, "is_pet_of", facts.get("owner", name).capitalize()
+                )
                 self.add_entity(name, "animal")
             for interest in facts.get("interests", []):
-                self.add_triple(name, "loves", interest.capitalize(), valid_from="2025-01-01")
+                self.add_triple(
+                    name, "loves", interest.capitalize(), valid_from="2025-01-01"
+                )

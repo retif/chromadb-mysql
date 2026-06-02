@@ -67,7 +67,10 @@ def install_fake_mempalace():
     The helpers are pure functions; we provide faithful tiny implementations
     (passthrough sanitize, ISO date-only normalisation) so temporal logic is
     still exercised. Returns a teardown callable."""
-    saved = {k: sys.modules.get(k) for k in ("mempalace", "mempalace.knowledge_graph", "mempalace.config")}
+    saved = {
+        k: sys.modules.get(k)
+        for k in ("mempalace", "mempalace.knowledge_graph", "mempalace.config")
+    }
 
     pkg = types.ModuleType("mempalace")
     pkg.__path__ = []  # mark as package
