@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "chromadb-mysql-backend"
 version = "0.1.0"
-description = "Drop-in ChromaDB-API-compatible backend in MySQL 9 VECTOR with in-DB HeatWave ML_EMBED embeddings (active default). A switchable extension for mempalace."
+description = "Switchable HeatWave MySQL backends for mempalace: a drop-in ChromaDB-API-compatible vector store (MySQL 9 VECTOR + in-DB ML_EMBED) and a drop-in temporal knowledge-graph store — both opt-in, both leaving the standard SQLite/ChromaDB paths untouched when disabled."
 requires-python = ">=3.10"
 dependencies = [
   # pymysql (pure-Python driver) is required at runtime in MySQL mode; kept out
@@ -26,6 +26,11 @@ include = [
   "chromadb_mysql_backend/**",
   "chromadb_switch.py",
   "activate-chromadb-mysql.pth",
+  # Sibling backend: the temporal knowledge graph on the same HeatWave MySQL,
+  # its first-party class-swap switch, and the .pth that auto-activates it.
+  "mempalace_kg_mysql/**",
+  "mempalace_kg_switch.py",
+  "activate-mempalace-kg-mysql.pth",
 ]
 
 [tool.pytest.ini_options]
