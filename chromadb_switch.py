@@ -25,9 +25,38 @@ import sys
 ENV_VAR = "MEMPALACE_CHROMA_BACKEND"
 ENABLE_VALUE = "mysql"
 
+# Modules that do `from .backends.chroma import hnsw_capacity_status` at import
+# time, so their local binding must be rebound when we swap the source symbol.
+_CAPACITY_CONSUMERS = ("mempalace.mcp_server",)
+
 
 def enabled() -> bool:
     return os.environ.get(ENV_VAR, "").strip().lower() == ENABLE_VALUE
+
+
+def _patch_capacity_probe() -> None:
+    """Reroute mempalace's embedded-Chroma HNSW capacity probe to the MySQL
+    stand-in.
+
+    ``mempalace.backends.chroma.hnsw_capacity_status`` reads ``chroma.sqlite3``
+    and the HNSW metadata pickle *directly as files* to guard the embedded
+    #1222 segfault. Under the MySQL backend there is no HNSW segment, and the
+    vestigial chroma.sqlite3 sits on a decommissioned object store, so that read
+    hangs ~tens of seconds per search. Swap in the MySQL stand-in (never
+    diverged; reports the live row count; never touches chroma.sqlite3) before
+    mempalace's mcp_server imports the symbol, and rebind it if already imported.
+    Best-effort: never raise — a failed patch must not break the chromadb
+    redirect or the standard path.
+    """
+    repl = importlib.import_module("chromadb_mysql_backend._capacity").hnsw_capacity_status
+    chroma_mod = importlib.import_module("mempalace.backends.chroma")
+    if getattr(chroma_mod, "hnsw_capacity_status", None) is repl:
+        return
+    chroma_mod.hnsw_capacity_status = repl
+    for name in _CAPACITY_CONSUMERS:
+        m = sys.modules.get(name)
+        if m is not None and hasattr(m, "hnsw_capacity_status"):
+            m.hnsw_capacity_status = repl
 
 
 def activate() -> bool:
@@ -36,15 +65,21 @@ def activate() -> bool:
     if not enabled():
         return False
     backend = importlib.import_module("chromadb_mysql_backend")
-    if sys.modules.get("chromadb") is backend:
-        return True
-    sys.modules["chromadb"] = backend
-    # Register submodules so `from chromadb.errors import NotFoundError` resolves
-    # (the import machinery looks up sys.modules['chromadb.errors'], not getattr
-    # on the aliased package). mempalace imports this at module load.
-    errors_mod = importlib.import_module("chromadb_mysql_backend.errors")
-    sys.modules["chromadb.errors"] = errors_mod
-    backend.errors = errors_mod
+    if sys.modules.get("chromadb") is not backend:
+        sys.modules["chromadb"] = backend
+        # Register submodules so `from chromadb.errors import NotFoundError`
+        # resolves (the import machinery looks up sys.modules['chromadb.errors'],
+        # not getattr on the aliased package). mempalace imports this at load.
+        errors_mod = importlib.import_module("chromadb_mysql_backend.errors")
+        sys.modules["chromadb.errors"] = errors_mod
+        backend.errors = errors_mod
+    # Reroute the HNSW capacity safeguard to the MySQL stand-in (idempotent,
+    # best-effort). Done after the chromadb alias so importing
+    # mempalace.backends.chroma resolves `import chromadb` to the shim.
+    try:
+        _patch_capacity_probe()
+    except Exception:  # noqa: BLE001 - capacity patch must not break the redirect
+        pass
     return True
 
 
