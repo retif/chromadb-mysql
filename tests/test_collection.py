@@ -51,20 +51,26 @@ def test_update_reembeds_from_document():
 def test_query_ml_embed_two_texts():
     p = FakePool(fetch_results=[[], []])
     _coll(p).query(query_texts=["x", "yy"], n_results=3)
-    assert len(p.calls) == 2
-    sql, params, _ = p.calls[0]
-    assert (
-        "VECTOR_DISTANCE(embedding, sys.ML_EMBED_ROW(%s, "
-        "JSON_OBJECT('model_id', %s)), 'COSINE')" in sql
-    )
-    assert "ORDER BY distance ASC LIMIT %s" in sql
-    assert params[0] == "x" and params[1] == "all_minilm_l12_v2" and params[-1] == 3
+    # Each text embeds ONCE into @qv (SET) then scans against it (SELECT):
+    # 2 texts × 2 statements = 4 calls. The embed must NOT be inlined in the
+    # per-row VECTOR_DISTANCE (that re-embeds once per row — minutes/hang).
+    assert len(p.calls) == 4
+    set_sql, set_params, _ = p.calls[0]
+    sel_sql, sel_params, _ = p.calls[1]
+    assert "SET @qv = sys.ML_EMBED_ROW(%s, JSON_OBJECT('model_id', %s))" in set_sql
+    assert set_params == ["x", "all_minilm_l12_v2"]
+    assert "VECTOR_DISTANCE(embedding, @qv, 'COSINE')" in sel_sql
+    assert "ML_EMBED_ROW" not in sel_sql  # embed not re-evaluated per row
+    assert "ORDER BY distance ASC LIMIT %s" in sel_sql
+    assert sel_params[-1] == 3
 
 
 def test_query_with_where():
     p = FakePool(fetch_results=[[]])
     _coll(p).query(query_texts=["q"], where={"wing": "infra"}, n_results=2)
-    assert p.last()[1] == ["q", "all_minilm_l12_v2", "$.wing", "infra", 2]
+    # SET @qv carries text+model; the SELECT carries where-params + limit.
+    assert p.calls[0][1] == ["q", "all_minilm_l12_v2"]
+    assert p.calls[1][1] == ["$.wing", "infra", 2]
 
 
 def test_query_precomputed():

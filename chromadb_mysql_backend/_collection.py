@@ -170,20 +170,32 @@ class Collection:
         clause, wparams = _where.translate(where) if where else ("", [])
         per_query = []
         if query_embeddings is None:
-            # ML_EMBED path — embed the query text in-DB.
+            # ML_EMBED path — embed the query text in-DB, but ONCE: set @qv to
+            # the query embedding, then compare each row against that constant.
+            # Inlining sys.ML_EMBED_ROW(text) inside the per-row VECTOR_DISTANCE
+            # makes MySQL re-evaluate the (expensive ~seconds) embed once per
+            # row — N×embed-cost, minutes for a few hundred drawers, which reads
+            # as a hung search. @qv is computed once on the same connection.
             for text in list(query_texts or []):
-                params = [text, self._embed_model] + wparams
+                set_qv = (
+                    "SET @qv = sys.ML_EMBED_ROW(%s, JSON_OBJECT('model_id', %s))"
+                )
                 sql = (
                     "SELECT id, document, metadata, "
-                    "VECTOR_DISTANCE(embedding, sys.ML_EMBED_ROW(%s, "
-                    "JSON_OBJECT('model_id', %s)), 'COSINE') AS distance "
+                    "VECTOR_DISTANCE(embedding, @qv, 'COSINE') AS distance "
                     f"FROM `{self.name}`"
                 )
+                params: list = list(wparams)
                 if clause:
                     sql += f" WHERE {clause}"
                 sql += " ORDER BY distance ASC LIMIT %s"
                 params.append(int(n_results))
-                rows = self._pool.execute(sql, params, fetch=True) or []
+                rows = (
+                    self._pool.execute_seq(
+                        [(set_qv, [text, self._embed_model]), (sql, params)]
+                    )
+                    or []
+                )
                 per_query.append([self._row(r) for r in rows])
         else:
             for vec in query_embeddings:

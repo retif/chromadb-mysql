@@ -77,5 +77,24 @@ class Pool:
         finally:
             conn.close()
 
+    def execute_seq(self, statements, *, fetch_last: bool = True):
+        """Run several statements on ONE connection, returning the last one's
+        rows. Needed when a later statement references a session ``@var`` set by
+        an earlier one — e.g. embedding the query ONCE into ``@qv`` and then
+        scanning ``VECTOR_DISTANCE(embedding, @qv)``. Inlining the embed in the
+        per-row distance instead makes MySQL re-evaluate ``sys.ML_EMBED_ROW``
+        once *per row* (N×embed-cost — minutes for a few hundred rows).
+
+        ``statements`` is a list of ``(sql, params)`` tuples.
+        """
+        conn = self._connect()
+        try:
+            with conn.cursor() as cur:
+                for sql, params in statements:
+                    cur.execute(sql, params or [])
+                return cur.fetchall() if fetch_last else None
+        finally:
+            conn.close()
+
     def ddl_create_table(self, table: str, dim: int) -> None:
         self.execute(_DDL.format(table=table, dim=dim))

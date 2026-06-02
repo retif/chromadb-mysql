@@ -23,6 +23,15 @@ class FakePool:
             return self._fetch.pop(0) if self._fetch else []
         return None
 
+    def execute_seq(self, statements, *, fetch_last=True):
+        # records every statement (so tests can assert the SET @qv + SELECT
+        # pair) and serves one canned fetch result for the sequence.
+        for sql, params in statements:
+            self.calls.append((sql, list(params or []), False))
+        if fetch_last:
+            return self._fetch.pop(0) if self._fetch else []
+        return None
+
     def ddl_create_table(self, table, dim):
         self.ddl.append((table, dim))
 
