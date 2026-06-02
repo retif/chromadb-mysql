@@ -48,7 +48,9 @@ def _patch_capacity_probe() -> None:
     Best-effort: never raise — a failed patch must not break the chromadb
     redirect or the standard path.
     """
-    repl = importlib.import_module("chromadb_mysql_backend._capacity").hnsw_capacity_status
+    repl = importlib.import_module(
+        "chromadb_mysql_backend._capacity"
+    ).hnsw_capacity_status
     chroma_mod = importlib.import_module("mempalace.backends.chroma")
     if getattr(chroma_mod, "hnsw_capacity_status", None) is repl:
         return

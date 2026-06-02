@@ -56,7 +56,9 @@ def hnsw_capacity_status(
         )
         n = int(rows[0]["n"]) if rows else 0
     except Exception:  # noqa: BLE001 - never raise from a safeguard probe
-        out["message"] = "MySQL/HeatWave VECTOR backend: flat scan, no HNSW capacity limit"
+        out["message"] = (
+            "MySQL/HeatWave VECTOR backend: flat scan, no HNSW capacity limit"
+        )
         return out
 
     # In a flat-scan backend every stored row is "in the index", so sqlite_count

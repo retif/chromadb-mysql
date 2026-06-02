@@ -46,9 +46,15 @@ def test_capacity_never_raises_on_db_error(monkeypatch):
 
 def test_switch_reroutes_capacity_probe(monkeypatch):
     # fake mempalace.backends.chroma with the original (sqlite-reading) symbol
-    saved = {k: sys.modules.get(k) for k in (
-        "mempalace", "mempalace.backends", "mempalace.backends.chroma", "mempalace.mcp_server"
-    )}
+    saved = {
+        k: sys.modules.get(k)
+        for k in (
+            "mempalace",
+            "mempalace.backends",
+            "mempalace.backends.chroma",
+            "mempalace.mcp_server",
+        )
+    }
     try:
         pkg = types.ModuleType("mempalace")
         pkg.__path__ = []
@@ -63,10 +69,14 @@ def test_switch_reroutes_capacity_probe(monkeypatch):
         # a consumer that already imported the symbol by value
         consumer = types.ModuleType("mempalace.mcp_server")
         consumer.hnsw_capacity_status = _original
-        sys.modules.update({
-            "mempalace": pkg, "mempalace.backends": be,
-            "mempalace.backends.chroma": chroma, "mempalace.mcp_server": consumer,
-        })
+        sys.modules.update(
+            {
+                "mempalace": pkg,
+                "mempalace.backends": be,
+                "mempalace.backends.chroma": chroma,
+                "mempalace.mcp_server": consumer,
+            }
+        )
 
         chromadb_switch._patch_capacity_probe()
 
