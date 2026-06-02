@@ -177,9 +177,7 @@ class Collection:
             # row — N×embed-cost, minutes for a few hundred drawers, which reads
             # as a hung search. @qv is computed once on the same connection.
             for text in list(query_texts or []):
-                set_qv = (
-                    "SET @qv = sys.ML_EMBED_ROW(%s, JSON_OBJECT('model_id', %s))"
-                )
+                set_qv = "SET @qv = sys.ML_EMBED_ROW(%s, JSON_OBJECT('model_id', %s))"
                 sql = (
                     "SELECT id, document, metadata, "
                     "VECTOR_DISTANCE(embedding, @qv, 'COSINE') AS distance "
