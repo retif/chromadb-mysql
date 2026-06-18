@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# mempalace-remote — run the stock `mempalace` CLI against the REAL cluster
+# palace (OCI HeatWave MySQL 10.0.2.15, db `mempalace`) from the laptop.
+#
+# The stock CLI can't reach the cluster palace on its own, for two reasons this
+# wrapper bridges:
+#
+#   1. BACKEND. Upstream mempalace only ever speaks to a local on-disk ChromaDB
+#      (chromadb.PersistentClient(path=...)). The chromadb-mysql-backend .pth
+#      shim — installed *beside* mempalace in the same env — redirects that to
+#      MySQL when MEMPALACE_CHROMA_BACKEND=mysql / MEMPALACE_KG_BACKEND=mysql.
+#      So a bare `mempalace mine` writes a SEPARATE local palace; this wrapper
+#      flips the env so it writes the cluster's MySQL-backed palace instead.
+#
+#   2. NETWORK. 10.0.2.15 is OCI-VCN-private — only node `armer` can reach it
+#      (that's why the pod is pinned there). We open an idempotent SSH local
+#      forward 127.0.0.1:$LPORT -> 10.0.2.15:3306 through armer. No ZeroTier
+#      changes. TLS-off MySQL is fine: the hop is wrapped in SSH.
+#
+# Usage:
+#   mempalace-remote status
+#   mempalace-remote mine ~/.claude/projects/ --mode convos --dry-run
+#   mempalace-remote <any mempalace subcommand> [args...]
+#
+# Env overrides:
+#   MEMPALACE_REMOTE_SSH      ssh host for the VCN jump   (default armer.oracle.cloud)
+#   MEMPALACE_REMOTE_LPORT    local forward port          (default 13306)
+#   MEMPALACE_BIN             mempalace entrypoint        (default: mempalace on PATH)
+#   MEMPALACE_MYSQL_USER/_DB  override user/schema        (default mempalace/mempalace)
+#   MEMPALACE_MYSQL_PASSWORD  override; else `pass infra/mempalace/mysql-password`
+
+set -euo pipefail
+
+SSH_HOST="${MEMPALACE_REMOTE_SSH:-armer.oracle.cloud}"
+LPORT="${MEMPALACE_REMOTE_LPORT:-13306}"
+RHOST=10.0.2.15
+RPORT=3306
+
+port_open() { timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/$1" 2>/dev/null; }
+
+# 1. Idempotent tunnel — reuse an existing forward if the port is already live.
+if port_open "$LPORT"; then
+	echo "mempalace-remote: reusing existing forward on 127.0.0.1:$LPORT" >&2
+else
+	echo "mempalace-remote: opening SSH tunnel 127.0.0.1:$LPORT -> $RHOST:$RPORT via $SSH_HOST" >&2
+	ssh -fN -o ExitOnForwardFailure=yes -L "$LPORT:$RHOST:$RPORT" "$SSH_HOST"
+	# Wait briefly for the forward to accept connections.
+	for _ in 1 2 3 4 5 6 7 8 9 10; do
+		port_open "$LPORT" && break
+		sleep 0.3
+	done
+	if ! port_open "$LPORT"; then
+		echo "mempalace-remote: tunnel did not come up on 127.0.0.1:$LPORT" >&2
+		exit 1
+	fi
+fi
+
+# 2. Resolve the MySQL password (explicit env wins; else password-store).
+if [ -z "${MEMPALACE_MYSQL_PASSWORD:-}" ]; then
+	MEMPALACE_MYSQL_PASSWORD="$(pass infra/mempalace/mysql-password)"
+fi
+
+# 3. Backend + connection env, then hand off to the stock CLI. The .pth shim
+#    redirects `import chromadb` -> MySQL at interpreter startup.
+export MEMPALACE_CHROMA_BACKEND=mysql
+export MEMPALACE_KG_BACKEND=mysql
+export MEMPALACE_MYSQL_HOST=127.0.0.1
+export MEMPALACE_MYSQL_PORT="$LPORT"
+export MEMPALACE_MYSQL_USER="${MEMPALACE_MYSQL_USER:-mempalace}"
+export MEMPALACE_MYSQL_DB="${MEMPALACE_MYSQL_DB:-mempalace}"
+export MEMPALACE_MYSQL_PASSWORD
+
+# Read-side guard shim. status/wake-up/sync hard-check for an on-disk
+# chroma.sqlite3 (cli.py) before doing anything — a stale local-ChromaDB
+# assumption. In MySQL mode the backend ignores the path entirely, so a stub
+# dir + empty chroma.sqlite3 satisfies the guard and lets those commands run
+# against MySQL. (mine/add have no such guard.)
+export MEMPALACE_PALACE_PATH="${MEMPALACE_PALACE_PATH:-$HOME/.mempalace/palace}"
+mkdir -p "$MEMPALACE_PALACE_PATH"
+[ -e "$MEMPALACE_PALACE_PATH/chroma.sqlite3" ] || : >"$MEMPALACE_PALACE_PATH/chroma.sqlite3"
+
+exec "${MEMPALACE_BIN:-mempalace}" "$@"

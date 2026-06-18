@@ -30,6 +30,59 @@ edits in mempalace, and standard behaviour is preserved by default.
 | `MEMPALACE_MYSQL_PORT` | port | `3306` |
 | `MEMPALACE_MYSQL_USER` / `_PASSWORD` / `_DB` | credentials / schema | `mempalace` / – / `mempalace` |
 
+## Laptop CLI — `mempalace-remote`
+
+The stock `mempalace` CLI can't reach the cluster palace from a laptop for two
+reasons: (1) it only ever opens a **local on-disk ChromaDB**
+(`PersistentClient(path=…)`) — a bare `mempalace mine` writes a *separate* local
+palace, not the cluster's; (2) the cluster's MySQL (`10.0.2.15`, the OCI HeatWave
+instance) is **VCN-private**, reachable only via node `armer`.
+
+`bin/mempalace-remote` bridges both: it opens an idempotent SSH local-forward
+`127.0.0.1:13306 → 10.0.2.15:3306` through `armer`, exports the backend +
+connection env (so the `.pth` shim redirects `chromadb` → this package), and
+`exec`s the stock CLI. So `mempalace-remote mine …` writes to the **real**
+cluster palace.
+
+### Install (uv tool, with this backend injected)
+
+```sh
+# public PyPI; clear the home's Gitea/Nexus index env so resolution doesn't 401
+env -u UV_INDEX_URL -u UV_EXTRA_INDEX_URL -u PIP_INDEX_URL -u PIP_EXTRA_INDEX_URL \
+  uv tool install mempalace --no-config \
+  --default-index https://pypi.org/simple \
+  --with "chromadb-mysql-backend[mysql] @ file://$PWD"
+```
+
+This lands both `.pth` files in the tool env's `site-packages`, so the MySQL
+redirect auto-activates whenever `MEMPALACE_CHROMA_BACKEND=mysql` is set.
+
+### Use
+
+```sh
+bin/mempalace-remote mine ~/.claude/projects/ --mode convos --dry-run   # preview
+bin/mempalace-remote mine ~/.claude/projects/ --mode convos             # backfill
+```
+
+Password comes from `pass infra/mempalace/mysql-password` by default. Overrides:
+`MEMPALACE_REMOTE_SSH` (jump host, default `armer.oracle.cloud`),
+`MEMPALACE_REMOTE_LPORT` (default `13306`), `MEMPALACE_MYSQL_PASSWORD`.
+
+### Read-side guard shim
+
+Some **read-side** CLI commands (`status`, `wake-up`, `sync`) hard-gate on a
+local `chroma.sqlite3` file (cli.py — a leftover on-disk-ChromaDB assumption)
+and would print "No palace found" in MySQL mode even though the data is fully
+reachable. The wrapper works around this without patching mempalace: it creates
+a stub `$MEMPALACE_PALACE_PATH/chroma.sqlite3` (empty) so the existence guard
+passes, after which the command reads through the MySQL-aliased chromadb client.
+Verified: `mempalace-remote status` reports the live cluster drawer count and
+full wing/room tree; `mempalace-remote wake-up` renders L0/L1 from MySQL.
+
+Note: client-side embedding-function construction logs a benign
+`No module named 'chromadb.utils'` and falls back — harmless for status/wake-up,
+and query embedding for `search` is computed server-side in HeatWave anyway.
+
 ## Status
 
 - ✅ Implemented + unit-tested (no DB needed): `where` translator (equality +
