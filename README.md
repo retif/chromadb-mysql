@@ -79,9 +79,12 @@ passes, after which the command reads through the MySQL-aliased chromadb client.
 Verified: `mempalace-remote status` reports the live cluster drawer count and
 full wing/room tree; `mempalace-remote wake-up` renders L0/L1 from MySQL.
 
-Note: client-side embedding-function construction logs a benign
-`No module named 'chromadb.utils'` and falls back — harmless for status/wake-up,
-and query embedding for `search` is computed server-side in HeatWave anyway.
+Note: query embedding for `search` is computed server-side in HeatWave
+(`ML_EMBED`), so no client embedder is needed. mempalace still imports
+`ONNXMiniLM_L6_V2` from `chromadb.utils.embedding_functions` to build a
+(decorative, in db mode) client EF; the backend exposes an inert stub for that
+import (registered by `chromadb_switch`) so it resolves quietly instead of
+raising a `No module named 'chromadb.utils'` traceback.
 
 ## Status
 

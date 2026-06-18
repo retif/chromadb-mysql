@@ -75,6 +75,18 @@ def activate() -> bool:
         errors_mod = importlib.import_module("chromadb_mysql_backend.errors")
         sys.modules["chromadb.errors"] = errors_mod
         backend.errors = errors_mod
+        # Same for `chromadb.utils.embedding_functions` — mempalace imports
+        # ONNXMiniLM_L6_V2 from it to build a (decorative, in db mode) client
+        # embedding function. Register the submodules so the import resolves
+        # quietly instead of raising ModuleNotFoundError.
+        utils_mod = importlib.import_module("chromadb_mysql_backend.utils")
+        ef_mod = importlib.import_module(
+            "chromadb_mysql_backend.utils.embedding_functions"
+        )
+        sys.modules["chromadb.utils"] = utils_mod
+        sys.modules["chromadb.utils.embedding_functions"] = ef_mod
+        utils_mod.embedding_functions = ef_mod
+        backend.utils = utils_mod
     # Reroute the HNSW capacity safeguard to the MySQL stand-in (idempotent,
     # best-effort). Done after the chromadb alias so importing
     # mempalace.backends.chroma resolves `import chromadb` to the shim.
