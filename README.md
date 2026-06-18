@@ -68,6 +68,31 @@ Password comes from `pass infra/mempalace/mysql-password` by default. Overrides:
 `MEMPALACE_REMOTE_SSH` (jump host, default `armer.oracle.cloud`),
 `MEMPALACE_REMOTE_LPORT` (default `13306`), `MEMPALACE_MYSQL_PASSWORD`.
 
+### Resumable backfill — `mempalace-batch-ingest`
+
+A full `~/.claude/projects` backfill is a multi-hour, single-process,
+CPU-bound job (measured: the mine is ~96% miner-CPU — parsing/chunking/room-
+detection — so neither faster embedding, running on `armer`, nor parallel
+workers speed it; one worker already saturates the CPU). `bin/mempalace-batch-ingest`
+makes that job **stop/resume-able and snapshot-pinnable** via a durable per-file
+index:
+
+```sh
+bin/mempalace-batch-ingest --wing claude_history            # start / resume
+bin/mempalace-batch-ingest --wing claude_history --status   # progress + ETA
+bin/mempalace-batch-ingest --wing claude_history --limit 200  # cap files this run
+bin/mempalace-batch-ingest --reset                          # clear the index
+```
+
+It discovers files under `--source` (default `~/.claude/projects`, `*.jsonl`),
+records each in `--index` (default `~/.mempalace/backfill-index.json`), and
+processes them in `--batch` groups via `mempalace-remote mine`, **rewriting the
+index atomically after each batch**. Stop with Ctrl-C/SIGTERM between batches
+(or kill mid-batch — that batch stays `pending` and re-mines idempotently). The
+index file *is* the snapshot: `cp <index> <index>.pin-<label>` to pin a point,
+resume a pin with `--index <index>.pin-<label>`. Default embedder is OpenVINO
+**CPU** (`--embed-device`; `GPU` OOMs on the Iris Xe — see `xpu-bench/`).
+
 ### Read-side guard shim
 
 Some **read-side** CLI commands (`status`, `wake-up`, `sync`) hard-gate on a
