@@ -84,6 +84,28 @@ perturb vectors and break cosine parity with the palace. (3) The OpenCL ICD
 sentence-transformers-backend variant (CPU works; its OpenVINO-GPU path hit the
 transformers/optimum dep issue). `bench.py` is the torch-XPU attempt (crashes).
 
+### …but it crashes inside the real miner (and gives no speedup anyway)
+
+The backend gained an `OpenVINOEmbedder` (`_embed.py`, selected via
+`MEMPALACE_EMBED_MODE=client` + `MEMPALACE_EMBED_OPENVINO_DEVICE=GPU`) so
+`mempalace mine` can embed on the iGPU. Running a real 50-file mine through it:
+
+- It **aborted** mid-run: `[GPU] clFinish … CL_OUT_OF_RESOURCES` (core dumped).
+  The 741/s bench used small uniform batches; the miner feeds variable-length /
+  larger batches that **exhaust the Iris Xe's shared resources**. Toy-bench
+  stable, production-unstable — exactly the "may behave unexpectedly" warning.
+- Before crashing it ran at **168/min — identical to the CPU-embed baseline
+  (164/min)**. So swapping a 2× faster embedder changed nothing: this is the
+  direct, measured confirmation that **embedding is not the backfill bottleneck**
+  — the miner pipeline over the SSH tunnel is (parse/chunk/dedup-query/insert,
+  ~521 drawers/min steady).
+
+**Net:** the iGPU-via-OpenVINO result is a real *capability* (fast, parity-1.0
+embedding for one-shot/uniform-batch jobs like query embedding or a controlled
+re-embed) but is **not usable for, and would not speed, the convo backfill**.
+The `OpenVINOEmbedder` is kept as opt-in (default stays sentence-transformers
+CPU, which is stable).
+
 ## The result that makes all of the above moot for backfill
 
 Embedding is **not** the backfill bottleneck:
