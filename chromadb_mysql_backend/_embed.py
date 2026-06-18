@@ -113,7 +113,11 @@ class OpenVINOEmbedder:
 
     dim = DEFAULT_DIM
 
-    def __init__(self, device: str = "GPU", model: str = "sentence-transformers/all-MiniLM-L12-v2"):
+    def __init__(
+        self,
+        device: str = "GPU",
+        model: str = "sentence-transformers/all-MiniLM-L12-v2",
+    ):
         self._device = device
         self._model = model
         self._compiled = None
