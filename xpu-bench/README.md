@@ -54,15 +54,35 @@ Xe-LP GPUs are unresolved on both IPEX and mainline:
 Officially-supported Intel iGPUs for `torch.xpu` are the recent **Core Ultra
 (Meteor / Lunar / Arrow Lake)** Arc/Xe2 iGPUs — not Tiger Lake.
 
-## The viable iGPU route (untested): OpenVINO
+## The iGPU route that WORKS: OpenVINO (benchmarked)
 
 OpenVINO runs on Intel iGPUs back through **Gen9** (Iris Xe Gen12 = supported)
-via the OpenCL/Level-Zero **NEO** runtime — already present on this host
-(`intel-opencl` / `libigdrcl.so`). So `all-MiniLM-L12-v2` → ONNX → ONNX Runtime
-with the **OpenVINO GPU** execution provider (or OpenVINO directly) *could* run
-embedding on the Iris Xe where torch-XPU cannot. Caveats: use **fp32** (int8
-quant perturbs vectors → would break cosine parity with the existing L12
-palace); re-verify cosine ≈ 1.0 before using for the palace.
+via the OpenCL/Level-Zero **NEO** runtime. With the OpenCL ICD wired in the
+devShell (`OCL_ICD_VENDORS` → intel-compute-runtime's `intel-neo.icd`),
+OpenVINO enumerates the iGPU as a `GPU` device and **runs the embedding model on
+it** — where torch-XPU cannot. Measured (`pure_ov_bench.py`, 512 texts,
+all-MiniLM-L12-v2, prebuilt `openvino_model.xml`):
+
+| backend | rate | cosine vs HeatWave |
+|---|---|---|
+| sentence-transformers PyTorch CPU | ~176/s | 1.00000 |
+| sentence-transformers ONNX CPU | ~123/s | 1.00000 |
+| sentence-transformers OpenVINO CPU | ~179/s | 1.00000 |
+| **pure OpenVINO CPU** (no torch/ST overhead) | **427/s** | 1.00000 |
+| **pure OpenVINO GPU — Iris Xe iGPU** | **741/s** | **1.00000** |
+
+So the iGPU does embedding at ~741/s with **perfect fp32 parity** (drop-in with
+the existing L12 palace). Key gotchas: (1) drive OpenVINO **directly** +
+`tokenizers` + manual mean-pool — the `transformers`/`optimum-intel` path kept
+breaking on a transformers downgrade (`optimum-intel` pins old transformers that
+can't even `AutoConfig` a BERT model). (2) Use **fp32**; int8 quant would
+perturb vectors and break cosine parity with the palace. (3) The OpenCL ICD
+(`OCL_ICD_VENDORS`) must point at the Intel driver or the GPU plugin fails with
+`m_device_map.empty()`.
+
+`pure_ov_bench.py` is the working bench; `onnx_bench.py` is the
+sentence-transformers-backend variant (CPU works; its OpenVINO-GPU path hit the
+transformers/optimum dep issue). `bench.py` is the torch-XPU attempt (crashes).
 
 ## The result that makes all of the above moot for backfill
 
@@ -72,8 +92,9 @@ Embedding is **not** the backfill bottleneck:
 |---|---|
 | HeatWave `ML_EMBED_ROW` (in-DB) | ~0.9 s/text, serial (~1/s) |
 | sentence-transformers CPU (warm, batched) | **317 texts/s** |
-| Iris Xe XPU | crashes (unsupported) |
-| **full client-mode mine (steady)** | **521 drawers/min** |
+| Iris Xe via torch-XPU | crashes (unsupported silicon) |
+| Iris Xe via **OpenVINO** | **741 texts/s** (works, parity 1.0) |
+| **full client-mode mine (steady)** | **521 drawers/min (~8.7/s)** |
 
 The full `~/.claude/projects` backfill (511,856 drawers) is **~16h**, bound by
 the **miner pipeline over the SSH tunnel** (JSONL parse, chunk, room-detection,
