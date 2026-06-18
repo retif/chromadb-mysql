@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# mempalace-backup — logical dump of the cluster palace (OCI HeatWave MySQL,
+# db `mempalace`) to NDJSON + DDL, via the same armer SSH tunnel as
+# mempalace-remote. A rollback point before a large `mempalace mine` backfill.
+#
+# Each table is dumped to <outdir>/<table>.ndjson (one JSON row per line) plus
+# <outdir>/<table>.ddl.sql (SHOW CREATE TABLE). VECTOR columns are dumped as
+# strings via VECTOR_TO_STRING() so they round-trip through STRING_TO_VECTOR()
+# on restore. A manifest.json records counts, schema, server version, and the
+# tunnel/source. Restore with bin/mempalace-restore <outdir>.
+#
+# Usage: mempalace-backup [outdir]
+#   outdir defaults to ~/.mempalace/backups/mempalace-<UTC timestamp>
+#
+# Env: same overrides as mempalace-remote (MEMPALACE_REMOTE_SSH/_LPORT,
+#      MEMPALACE_MYSQL_USER/_DB/_PASSWORD).
+
+set -euo pipefail
+
+SSH_HOST="${MEMPALACE_REMOTE_SSH:-armer.oracle.cloud}"
+LPORT="${MEMPALACE_REMOTE_LPORT:-13306}"
+RHOST=10.0.2.15
+RPORT=3306
+
+port_open() { timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/$1" 2>/dev/null; }
+
+if port_open "${LPORT}"; then
+	echo "mempalace-backup: reusing forward on 127.0.0.1:${LPORT}" >&2
+else
+	echo "mempalace-backup: opening SSH tunnel 127.0.0.1:${LPORT} -> ${RHOST}:${RPORT} via ${SSH_HOST}" >&2
+	ssh -fN -o ExitOnForwardFailure=yes -L "${LPORT}:${RHOST}:${RPORT}" "${SSH_HOST}"
+	for _ in 1 2 3 4 5 6 7 8 9 10; do
+		port_open "${LPORT}" && break
+		sleep 0.3
+	done
+	port_open "${LPORT}" || {
+		echo "mempalace-backup: tunnel did not come up on 127.0.0.1:${LPORT}" >&2
+		exit 1
+	}
+fi
+
+if [[ -z "${MEMPALACE_MYSQL_PASSWORD:-}" ]]; then
+	MEMPALACE_MYSQL_PASSWORD="$(pass infra/mempalace/mysql-password)"
+fi
+export MEMPALACE_MYSQL_PASSWORD
+export MEMPALACE_MYSQL_USER="${MEMPALACE_MYSQL_USER:-mempalace}"
+export MEMPALACE_MYSQL_DB="${MEMPALACE_MYSQL_DB:-mempalace}"
+export MEMPALACE_BACKUP_LPORT="${LPORT}"
+export MEMPALACE_BACKUP_OUTDIR="${1:-}"
+
+PY="${MEMPAL_PYTHON:-$HOME/.local/share/uv/tools/mempalace/bin/python}"
+[[ -x "${PY}" ]] || PY="$(command -v python3)"
+
+"${PY}" - <<'PY'
+import os, sys, json, datetime, pathlib
+import pymysql
+
+port = int(os.environ["MEMPALACE_BACKUP_LPORT"])
+user = os.environ["MEMPALACE_MYSQL_USER"]
+db = os.environ["MEMPALACE_MYSQL_DB"]
+pw = os.environ["MEMPALACE_MYSQL_PASSWORD"]
+outdir = os.environ.get("MEMPALACE_BACKUP_OUTDIR") or ""
+
+cx = pymysql.connect(host="127.0.0.1", port=port, user=user, password=pw, database=db)
+cur = cx.cursor()
+cur.execute("SELECT VERSION()")
+server_version = cur.fetchone()[0]
+ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+if not outdir:
+    outdir = os.path.expanduser(f"~/.mempalace/backups/mempalace-{ts}")
+out = pathlib.Path(outdir)
+out.mkdir(parents=True, exist_ok=True)
+
+cur.execute("SHOW TABLES")
+tables = [r[0] for r in cur.fetchall()]
+manifest = {"created_utc": ts, "server_version": server_version, "database": db,
+            "source": "10.0.2.15:3306 via 127.0.0.1:%d" % port, "tables": {}}
+
+for t in tables:
+    cur.execute(f"SHOW CREATE TABLE `{t}`")
+    ddl = cur.fetchone()[1]
+    (out / f"{t}.ddl.sql").write_text(ddl + ";\n")
+    cur.execute(f"SHOW COLUMNS FROM `{t}`")
+    cols = [(c[0], c[1]) for c in cur.fetchall()]
+    names = [c for c, _ in cols]
+    # VECTOR columns dumped as portable strings (round-trip via STRING_TO_VECTOR).
+    select_exprs, vec_cols = [], []
+    for c, ty in cols:
+        if "vector" in ty.lower():
+            select_exprs.append(f"VECTOR_TO_STRING(`{c}`) AS `{c}`")
+            vec_cols.append(c)
+        else:
+            select_exprs.append(f"`{c}`")
+    cur.execute(f"SELECT {', '.join(select_exprs)} FROM `{t}`")
+    n = 0
+    with open(out / f"{t}.ndjson", "w") as f:
+        for row in cur.fetchall():
+            rec = {}
+            for k, v in zip(names, row):
+                if isinstance(v, (bytes, bytearray)):
+                    v = v.decode("utf-8", "replace")
+                elif isinstance(v, datetime.datetime):
+                    v = v.isoformat()
+                rec[k] = v
+            f.write(json.dumps(rec, default=str) + "\n")
+            n += 1
+    manifest["tables"][t] = {"rows": n, "columns": names, "vector_columns": vec_cols}
+    print(f"  {t}: {n} rows -> {t}.ndjson")
+
+(out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+print(f"\nBackup written to: {out}")
+print("Tables: " + ", ".join(f"{t}={d['rows']}" for t, d in manifest["tables"].items()))
+PY

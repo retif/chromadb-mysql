@@ -40,46 +40,58 @@ class Collection:
     def upsert(self, ids, documents=None, metadatas=None, embeddings=None):
         self._write(ids, documents, metadatas, embeddings)
 
+    # Rows per INSERT statement. A mempalace upsert batch is up to ~1000 chunks;
+    # the backend used to issue one round-trip PER ROW, so a 1000-row batch was
+    # 1000 tunnel round-trips (~46 drawers/min over an SSH tunnel — the backfill
+    # bottleneck). Multi-row INSERT collapses that to ceil(n/_WRITE_BATCH) round
+    # trips, each still embedding in-DB via one ML_EMBED_ROW per value tuple.
+    # 100 keeps the statement well under max_allowed_packet (64 MB) and bounds
+    # the per-statement ML_EMBED fan-out.
+    _WRITE_BATCH = 100
+
     def _write(self, ids, documents, metadatas, embeddings):
+        if not ids:
+            return
         documents = documents or [None] * len(ids)
         metadatas = metadatas or [{}] * len(ids)
         if embeddings is None:
             # mempalace path — embed the document text in-DB via ML_EMBED.
-            sql = (
-                f"INSERT INTO `{self.name}` (id, document, metadata, embedding) "
-                "VALUES (%s, %s, %s, sys.ML_EMBED_ROW(%s, JSON_OBJECT('model_id', %s))) AS new "
-                "ON DUPLICATE KEY UPDATE document=new.document, "
-                "metadata=new.metadata, embedding=new.embedding"
-            )
-            for i, _id in enumerate(ids):
-                self._pool.execute(
-                    sql,
-                    [
-                        _id,
-                        documents[i],
-                        json.dumps(metadatas[i] or {}),
-                        documents[i] or "",
-                        self._embed_model,
-                    ],
-                )
+            tuple_sql = "(%s, %s, %s, sys.ML_EMBED_ROW(%s, JSON_OBJECT('model_id', %s)))"
+
+            def row_params(i):
+                return [
+                    ids[i],
+                    documents[i],
+                    json.dumps(metadatas[i] or {}),
+                    documents[i] or "",
+                    self._embed_model,
+                ]
         else:
             # precomputed-embeddings escape hatch.
+            tuple_sql = "(%s, %s, %s, STRING_TO_VECTOR(%s))"
+
+            def row_params(i):
+                return [
+                    ids[i],
+                    documents[i],
+                    json.dumps(metadatas[i] or {}),
+                    _embed.vector_to_sql(embeddings[i]),
+                ]
+
+        n = len(ids)
+        for start in range(0, n, self._WRITE_BATCH):
+            idx = range(start, min(start + self._WRITE_BATCH, n))
+            values = ", ".join(tuple_sql for _ in idx)
+            params: list = []
+            for i in idx:
+                params.extend(row_params(i))
             sql = (
                 f"INSERT INTO `{self.name}` (id, document, metadata, embedding) "
-                "VALUES (%s, %s, %s, STRING_TO_VECTOR(%s)) AS new "
+                f"VALUES {values} AS new "
                 "ON DUPLICATE KEY UPDATE document=new.document, "
                 "metadata=new.metadata, embedding=new.embedding"
             )
-            for i, _id in enumerate(ids):
-                self._pool.execute(
-                    sql,
-                    [
-                        _id,
-                        documents[i],
-                        json.dumps(metadatas[i] or {}),
-                        _embed.vector_to_sql(embeddings[i]),
-                    ],
-                )
+            self._pool.execute(sql, params)
 
     def update(self, ids, documents=None, metadatas=None, embeddings=None):
         # Partial per-id UPDATE: only the provided columns are touched.

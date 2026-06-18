@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# mempalace-restore — restore a mempalace-backup dump back into the cluster
+# palace (OCI HeatWave MySQL, db `mempalace`) via the armer SSH tunnel.
+#
+# DESTRUCTIVE: for each table present in the backup it TRUNCATEs then re-INSERTs
+# every row (VECTOR columns rebuilt via STRING_TO_VECTOR). This restores the
+# palace to exactly the backup snapshot — any rows added after the backup are
+# lost. Default is --dry-run (report only); pass --apply to actually write.
+#
+# Usage:
+#   mempalace-restore <backup-dir>            # dry-run (default, no writes)
+#   mempalace-restore <backup-dir> --apply    # truncate + reload (destructive)
+#   mempalace-restore <backup-dir> --apply --table mempalace_drawers   # one table
+#
+# Env: same overrides as mempalace-remote.
+
+set -euo pipefail
+
+BACKUP_DIR=""
+APPLY=0
+ONLY_TABLE=""
+for a in "$@"; do
+	case "${a}" in
+	--apply) APPLY=1 ;;
+	--table=*) ONLY_TABLE="${a#--table=}" ;;
+	--table) ;; # value picked up below
+	--*) echo "unknown flag: ${a}" >&2; exit 2 ;;
+	*)
+		if [[ -z "${BACKUP_DIR}" ]]; then BACKUP_DIR="${a}"; else ONLY_TABLE="${a}"; fi
+		;;
+	esac
+done
+[[ -n "${BACKUP_DIR}" && -d "${BACKUP_DIR}" ]] || {
+	echo "usage: mempalace-restore <backup-dir> [--apply] [--table NAME]" >&2
+	exit 2
+}
+
+SSH_HOST="${MEMPALACE_REMOTE_SSH:-armer.oracle.cloud}"
+LPORT="${MEMPALACE_REMOTE_LPORT:-13306}"
+RHOST=10.0.2.15
+RPORT=3306
+port_open() { timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/$1" 2>/dev/null; }
+if ! port_open "${LPORT}"; then
+	echo "mempalace-restore: opening SSH tunnel via ${SSH_HOST}" >&2
+	ssh -fN -o ExitOnForwardFailure=yes -L "${LPORT}:${RHOST}:${RPORT}" "${SSH_HOST}"
+	for _ in 1 2 3 4 5 6 7 8 9 10; do port_open "${LPORT}" && break; sleep 0.3; done
+	port_open "${LPORT}" || { echo "tunnel failed" >&2; exit 1; }
+fi
+
+if [[ -z "${MEMPALACE_MYSQL_PASSWORD:-}" ]]; then
+	MEMPALACE_MYSQL_PASSWORD="$(pass infra/mempalace/mysql-password)"
+fi
+export MEMPALACE_MYSQL_PASSWORD
+export MEMPALACE_MYSQL_USER="${MEMPALACE_MYSQL_USER:-mempalace}"
+export MEMPALACE_MYSQL_DB="${MEMPALACE_MYSQL_DB:-mempalace}"
+export MEMPALACE_RESTORE_LPORT="${LPORT}"
+export MEMPALACE_RESTORE_DIR="${BACKUP_DIR}"
+export MEMPALACE_RESTORE_APPLY="${APPLY}"
+export MEMPALACE_RESTORE_ONLY="${ONLY_TABLE}"
+
+PY="${MEMPAL_PYTHON:-$HOME/.local/share/uv/tools/mempalace/bin/python}"
+[[ -x "${PY}" ]] || PY="$(command -v python3)"
+
+"${PY}" - <<'PY'
+import os, sys, json, glob, pathlib
+import pymysql
+
+port = int(os.environ["MEMPALACE_RESTORE_LPORT"])
+d = pathlib.Path(os.environ["MEMPALACE_RESTORE_DIR"])
+apply = os.environ["MEMPALACE_RESTORE_APPLY"] == "1"
+only = os.environ["MEMPALACE_RESTORE_ONLY"]
+
+manifest = json.loads((d / "manifest.json").read_text())
+cx = pymysql.connect(host="127.0.0.1", port=port, user=os.environ["MEMPALACE_MYSQL_USER"],
+                     password=os.environ["MEMPALACE_MYSQL_PASSWORD"],
+                     database=os.environ["MEMPALACE_MYSQL_DB"], autocommit=False)
+cur = cx.cursor()
+print(f"{'APPLY' if apply else 'DRY-RUN'} restore from {d}")
+for t, meta in manifest["tables"].items():
+    if only and t != only:
+        continue
+    cols = meta["columns"]
+    vec = set(meta["vector_columns"])
+    rows = [json.loads(line) for line in (d / f"{t}.ndjson").read_text().splitlines() if line.strip()]
+    cur.execute(f"SELECT COUNT(*) FROM `{t}`")
+    cur_count = cur.fetchone()[0]
+    print(f"  {t}: backup={len(rows)} rows, current={cur_count} rows", end="")
+    if not apply:
+        print("  (dry-run, no change)")
+        continue
+    # Exclude GENERATED columns (e.g. wing/room derived from metadata JSON) —
+    # they cannot be inserted into; they recompute from their source columns.
+    cur.execute(
+        "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s AND EXTRA LIKE %s",
+        (os.environ["MEMPALACE_MYSQL_DB"], t, "%GENERATED%"),
+    )
+    generated = {r[0] for r in cur.fetchall()}
+    ins_cols = [c for c in cols if c not in generated]
+    placeholders = ", ".join(
+        "STRING_TO_VECTOR(%s)" if c in vec else "%s" for c in ins_cols
+    )
+    collist = ", ".join(f"`{c}`" for c in ins_cols)
+    cur.execute(f"TRUNCATE TABLE `{t}`")
+    batch = []
+    for r in rows:
+        batch.append(tuple(r.get(c) for c in ins_cols))
+    if batch:
+        cur.executemany(f"INSERT INTO `{t}` ({collist}) VALUES ({placeholders})", batch)
+    cur.execute(f"SELECT COUNT(*) FROM `{t}`")
+    print(f"  -> restored {cur.fetchone()[0]} rows")
+if apply:
+    cx.commit()
+    print("committed.")
+else:
+    print("\nDry-run only. Re-run with --apply to truncate+reload (destructive).")
+PY
