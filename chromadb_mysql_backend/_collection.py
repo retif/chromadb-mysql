@@ -56,7 +56,9 @@ class Collection:
         metadatas = metadatas or [{}] * len(ids)
         if embeddings is None:
             # mempalace path — embed the document text in-DB via ML_EMBED.
-            tuple_sql = "(%s, %s, %s, sys.ML_EMBED_ROW(%s, JSON_OBJECT('model_id', %s)))"
+            tuple_sql = (
+                "(%s, %s, %s, sys.ML_EMBED_ROW(%s, JSON_OBJECT('model_id', %s)))"
+            )
 
             def row_params(i):
                 return [
