@@ -54,6 +54,13 @@ class Collection:
             return
         documents = documents or [None] * len(ids)
         metadatas = metadatas or [{}] * len(ids)
+        # Client-side embedding (MEMPALACE_EMBED_MODE=client): if an embedder is
+        # configured and the caller didn't pass vectors, embed the documents
+        # locally (fast, batched) and take the precomputed STRING_TO_VECTOR
+        # path below — bypassing HeatWave ML_EMBED (~0.9s/text). Vectors are in
+        # the same space (model parity), so they're interchangeable.
+        if embeddings is None and self._embedder is not None:
+            embeddings = self._embedder.embed([d or "" for d in documents])
         if embeddings is None:
             # mempalace path — embed the document text in-DB via ML_EMBED.
             tuple_sql = (

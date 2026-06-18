@@ -34,6 +34,32 @@ def mode_from_env() -> str:
     return os.environ.get(ENV_MODE, "db").strip().lower()
 
 
+# Map a HeatWave ML_EMBED model_id to its sentence-transformers equivalent, so
+# client-side embedding (MEMPALACE_EMBED_MODE=client) produces vectors in the
+# SAME space as the in-DB ML_EMBED path. Verified parity: HeatWave
+# all_minilm_l12_v2 vs ST all-MiniLM-L12-v2 give cosine ~= 1.0 for the same
+# text, so a client-embedded palace is interchangeable with an ML_EMBED one.
+_ST_MODEL_BY_ID = {
+    "all_minilm_l12_v2": "sentence-transformers/all-MiniLM-L12-v2",
+    "all_minilm_l6_v2": "sentence-transformers/all-MiniLM-L6-v2",
+}
+
+
+def sentence_transformers_name(model_id: str) -> str:
+    """ST model name matching a HeatWave model_id (passthrough if unknown)."""
+    return _ST_MODEL_BY_ID.get(model_id, model_id)
+
+
+def make_client_embedder(embed_model: str | None = None):
+    """Return the client-side embedder when MEMPALACE_EMBED_MODE=client, else
+    None (in-DB ML_EMBED stays the default). The ST model matches the HeatWave
+    model_id so client- and ML_EMBED-produced vectors are cross-compatible."""
+    if mode_from_env() != "client":
+        return None
+    model_id = embed_model or model_from_env()
+    return MiniLMEmbedder(sentence_transformers_name(model_id))
+
+
 class Embedder(Protocol):
     dim: int
 
@@ -47,7 +73,9 @@ class MiniLMEmbedder:
 
     dim = DEFAULT_DIM
 
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L12-v2"):
+        # Default matches the palace's HeatWave model (all_minilm_l12_v2). Using
+        # the L6 default here would produce an incompatible vector space.
         self._model_name = model_name
         self._model = None
 

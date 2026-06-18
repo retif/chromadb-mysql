@@ -27,7 +27,13 @@ class Client:
     ):
         self._path = path
         self._embed_model = embed_model or _embed.model_from_env()
-        self._embedder = embedder  # optional client fallback, default None
+        # Client fallback: explicit injection wins; otherwise construct one iff
+        # MEMPALACE_EMBED_MODE=client (else None → in-DB ML_EMBED path).
+        self._embedder = (
+            embedder
+            if embedder is not None
+            else _embed.make_client_embedder(self._embed_model)
+        )
         self._pool = pool or _mysql.Pool()
 
     def _exists(self, name: str) -> bool:
