@@ -68,30 +68,30 @@ Password comes from `pass infra/mempalace/mysql-password` by default. Overrides:
 `MEMPALACE_REMOTE_SSH` (jump host, default `armer.oracle.cloud`),
 `MEMPALACE_REMOTE_LPORT` (default `13306`), `MEMPALACE_MYSQL_PASSWORD`.
 
-### Resumable backfill — `mempalace-batch-ingest`
+### Resumable backfill — in-place mine
 
-A full `~/.claude/projects` backfill is a multi-hour, single-process,
-CPU-bound job (measured: the mine is ~96% miner-CPU — parsing/chunking/room-
-detection — so neither faster embedding, running on `armer`, nor parallel
-workers speed it; one worker already saturates the CPU). `bin/mempalace-batch-ingest`
-makes that job **stop/resume-able and snapshot-pinnable** via a durable per-file
-index:
+A full `~/.claude/projects` backfill is a multi-hour, single-process, CPU-bound
+job (measured: ~96% miner-CPU — parsing/chunking/room-detection — so neither
+faster embedding, running on `armer`, nor parallel workers speed it; one worker
+already saturates the CPU). **It is also already resumable** — the miner writes
+a per-file sentinel keyed on `source_file` and **skips files it has already
+mined** on re-run. So the canonical backfill is just an in-place mine:
 
 ```sh
-bin/mempalace-batch-ingest --wing claude_history            # start / resume
-bin/mempalace-batch-ingest --wing claude_history --status   # progress + ETA
-bin/mempalace-batch-ingest --wing claude_history --limit 200  # cap files this run
-bin/mempalace-batch-ingest --reset                          # clear the index
+MEMPALACE_EMBED_MODE=client MEMPALACE_EMBED_OPENVINO_DEVICE=CPU \
+  bin/mempalace-remote mine ~/.claude/projects --mode convos --wing claude_history
 ```
 
-It discovers files under `--source` (default `~/.claude/projects`, `*.jsonl`),
-records each in `--index` (default `~/.mempalace/backfill-index.json`), and
-processes them in `--batch` groups via `mempalace-remote mine`, **rewriting the
-index atomically after each batch**. Stop with Ctrl-C/SIGTERM between batches
-(or kill mid-batch — that batch stays `pending` and re-mines idempotently). The
-index file *is* the snapshot: `cp <index> <index>.pin-<label>` to pin a point,
-resume a pin with `--index <index>.pin-<label>`. Default embedder is OpenVINO
-**CPU** (`--embed-device`; `GPU` OOMs on the Iris Xe — see `xpu-bench/`).
+Kill it anytime; re-run to resume (already-mined files are skipped). Because the
+drawer id is `(wing, room, source_file, …)`, mining the **real** paths is
+idempotent and consistent with the Stop/PreCompact hooks (which mine those same
+paths). For all-time history, point it at the archive once the live window has
+been pruned (`~/Documents/Claude_JSONL_Backup`).
+
+> **`bin/mempalace-batch-ingest` is DEPRECATED.** It staged each batch into a
+> throwaway `/tmp/mp-batch-XXXX` dir, which defeats the path-keyed dedup (the
+> miner never recognised the temp path as already-mined → no skip, duplicate
+> drawers on re-run, dead `/tmp` provenance). Use the in-place mine above.
 
 ### Read-side guard shim
 

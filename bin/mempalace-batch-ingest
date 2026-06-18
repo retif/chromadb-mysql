@@ -1,5 +1,19 @@
 #!/usr/bin/env python3
-"""mempalace-batch-ingest — resumable, indexed backfill of transcripts into the
+"""mempalace-batch-ingest — DEPRECATED. Use the native in-place mine instead:
+
+    mempalace-remote mine ~/.claude/projects --mode convos --wing claude_history
+
+WHY DEPRECATED: this tool stages each batch into a fresh /tmp/mp-batch-XXXX dir
+before mining. But the miner dedups (and forms drawer ids) by `source_file`
+PATH, so a throwaway temp path is never recognized as already-mined → it never
+skips, re-runs DUPLICATE, and provenance points at /tmp dirs that no longer
+exist. The miner ALREADY has native per-file resume (a sentinel per real
+source_file), so a plain in-place `mempalace mine <dir>` is resumable,
+idempotent, real-path-provenanced, and consistent with the Stop/PreCompact
+hooks (which mine the same real paths). Kept only for reference.
+
+--- original docstring (do not use) ---
+mempalace-batch-ingest — resumable, indexed backfill of transcripts into the
 cluster palace.
 
 Wraps `mempalace-remote mine` with a durable per-file INDEX so the backfill is
