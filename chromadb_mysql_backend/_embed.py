@@ -161,5 +161,13 @@ class OpenVINOEmbedder:
 
 def vector_to_sql(vec: list[float]) -> str:
     """MySQL 9 takes a vector as a JSON array string via STRING_TO_VECTOR().
-    Used by the precomputed-embeddings escape hatch + unit tests."""
-    return "[" + ",".join(repr(float(x)) for x in vec) + "]"
+    Used by the precomputed-embeddings escape hatch + unit tests.
+
+    Non-finite components (NaN/Inf) are coerced to 0.0: MySQL STRING_TO_VECTOR
+    rejects 'nan'/'inf' with error 6138 ("Data cannot be converted to a valid
+    vector"), which would crash the whole multi-row INSERT (and the backfill).
+    A degenerate component is meaningless in a normalized embedding anyway, so
+    zeroing it is safe and keeps the row insertable."""
+    import math
+
+    return "[" + ",".join(repr(x if math.isfinite(x) else 0.0) for x in (float(v) for v in vec)) + "]"
