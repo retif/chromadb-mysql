@@ -94,13 +94,41 @@ class Collection:
             params: list = []
             for i in idx:
                 params.extend(row_params(i))
-            sql = (
-                f"INSERT INTO `{self.name}` (id, document, metadata, embedding) "
-                f"VALUES {values} AS new "
-                "ON DUPLICATE KEY UPDATE document=new.document, "
+            on_dup = (
+                " AS new ON DUPLICATE KEY UPDATE document=new.document, "
                 "metadata=new.metadata, embedding=new.embedding"
             )
-            self._pool.execute(sql, params)
+            sql = (
+                f"INSERT INTO `{self.name}` (id, document, metadata, embedding) "
+                f"VALUES {values}{on_dup}"
+            )
+            try:
+                self._pool.execute(sql, params)
+            except Exception:
+                # A single bad row (e.g. a vector MySQL's STRING_TO_VECTOR
+                # rejects, error 6138) fails the whole multi-row INSERT. Retry
+                # the batch row-by-row so the rest still lands; skip + count any
+                # individual row that still fails, so a backfill survives rare
+                # degenerate embeddings instead of crashing.
+                single = (
+                    f"INSERT INTO `{self.name}` (id, document, metadata, embedding) "
+                    f"VALUES {tuple_sql}{on_dup}"
+                )
+                skipped = 0
+                for i in idx:
+                    try:
+                        self._pool.execute(single, row_params(i))
+                    except Exception:
+                        skipped += 1
+                if skipped:
+                    import logging
+
+                    logging.getLogger(__name__).warning(
+                        "chromadb_mysql_backend: skipped %d unfilable row(s) in "
+                        "table %s (likely degenerate embedding)",
+                        skipped,
+                        self.name,
+                    )
 
     def update(self, ids, documents=None, metadatas=None, embeddings=None):
         # Partial per-id UPDATE: only the provided columns are touched.
