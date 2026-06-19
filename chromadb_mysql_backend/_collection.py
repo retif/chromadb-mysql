@@ -21,6 +21,36 @@ from . import _embed, _shapes, _where
 _NO_WHERE_DOC = "where_document is not supported by the mysql backend"
 
 
+def _record_skips(table: str, skipped: list) -> None:
+    """Append a durable, queryable record of rows that could not be inserted
+    (per-row fallback in _write). One JSON object per line in
+    ``$MEMPALACE_SKIP_LOG`` (default ``~/.mempalace/embed-skips.ndjson``) with
+    the drawer id (encodes wing/room/source_file/chunk), source_file, error, and
+    a doc preview — so a skipped chunk can be found and re-mined later. Best
+    effort: never raise from the logging path."""
+    import logging
+    import os
+    import time
+
+    path = os.environ.get("MEMPALACE_SKIP_LOG") or os.path.expanduser(
+        "~/.mempalace/embed-skips.ndjson"
+    )
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        ts = time.time()
+        with open(path, "a") as f:
+            for rec in skipped:
+                f.write(json.dumps({"ts": ts, "table": table, **rec}) + "\n")
+    except Exception:  # noqa: BLE001 - logging must not break the write path
+        pass
+    logging.getLogger(__name__).warning(
+        "chromadb_mysql_backend: skipped %d unfilable row(s) in %s -> %s",
+        len(skipped),
+        table,
+        path,
+    )
+
+
 class Collection:
     def __init__(self, name, pool, embed_model=None, embedder=None, metadata=None):
         self.name = name
@@ -114,21 +144,22 @@ class Collection:
                     f"INSERT INTO `{self.name}` (id, document, metadata, embedding) "
                     f"VALUES {tuple_sql}{on_dup}"
                 )
-                skipped = 0
+                skipped = []
                 for i in idx:
                     try:
                         self._pool.execute(single, row_params(i))
-                    except Exception:
-                        skipped += 1
+                    except Exception as exc:  # noqa: BLE001
+                        skipped.append(
+                            {
+                                "id": ids[i],
+                                "source_file": (metadatas[i] or {}).get("source_file"),
+                                "room": (metadatas[i] or {}).get("room"),
+                                "error": str(exc)[:300],
+                                "doc_preview": (documents[i] or "")[:200],
+                            }
+                        )
                 if skipped:
-                    import logging
-
-                    logging.getLogger(__name__).warning(
-                        "chromadb_mysql_backend: skipped %d unfilable row(s) in "
-                        "table %s (likely degenerate embedding)",
-                        skipped,
-                        self.name,
-                    )
+                    _record_skips(self.name, skipped)
 
     def update(self, ids, documents=None, metadatas=None, embeddings=None):
         # Partial per-id UPDATE: only the provided columns are touched.
