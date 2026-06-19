@@ -170,4 +170,10 @@ def vector_to_sql(vec: list[float]) -> str:
     zeroing it is safe and keeps the row insertable."""
     import math
 
-    return "[" + ",".join(repr(x if math.isfinite(x) else 0.0) for x in (float(v) for v in vec)) + "]"
+    return (
+        "["
+        + ",".join(
+            repr(x if math.isfinite(x) else 0.0) for x in (float(v) for v in vec)
+        )
+        + "]"
+    )
