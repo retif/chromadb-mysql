@@ -14,9 +14,14 @@ from __future__ import annotations
 
 import os
 
-# One table per Chroma collection. metadata is JSON; wing/room are generated
-# columns purely to back an index for the hot equality filters. embedding is a
-# fixed-width VECTOR; dim is set from the embedder at create time.
+# One table per Chroma collection. metadata is JSON; wing/room/source_file are
+# generated columns purely to back indexes for the hot equality filters — the
+# MySQL optimiser rewrites `JSON_EXTRACT(metadata,'$.wing')=…` (etc.) to the
+# generated column, so the JSON-path where clauses in _where use the index.
+# source_file is the per-file dedup key (file_already_mined queries it once per
+# file during mine/resume); WITHOUT this index it's a full table scan per file,
+# which makes large backfills and the live-capture hooks pathologically slow.
+# embedding is a fixed-width VECTOR; dim is set from the embedder at create time.
 _DDL = """
 CREATE TABLE IF NOT EXISTS `{table}` (
   id           VARCHAR(191) PRIMARY KEY,
@@ -25,7 +30,9 @@ CREATE TABLE IF NOT EXISTS `{table}` (
   embedding    VECTOR({dim}),
   wing         VARCHAR(255) AS (JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.wing'))) STORED,
   room         VARCHAR(255) AS (JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.room'))) STORED,
-  KEY idx_wing_room (wing, room)
+  source_file  VARCHAR(512) AS (JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.source_file'))) VIRTUAL,
+  KEY idx_wing_room (wing, room),
+  KEY idx_source_file (source_file(255))
 )
 """
 
