@@ -240,7 +240,9 @@ class Collection:
                 params.extend(wparams)
         sql += f" GROUP BY `{field}`"
         rows = self._pool.execute(sql, params, fetch=True) or []
-        return {(r["k"] if r["k"] is not None else "unknown"): int(r["n"]) for r in rows}
+        return {
+            (r["k"] if r["k"] is not None else "unknown"): int(r["n"]) for r in rows
+        }
 
     def get(
         self,
