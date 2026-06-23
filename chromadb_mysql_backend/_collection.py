@@ -206,6 +206,42 @@ class Collection:
         )
         return int(rows[0]["n"]) if rows else 0
 
+    # Generated columns that are safe to GROUP BY / filter on by name. Whitelist
+    # (not interpolated user input) — these are the STORED/VIRTUAL columns the
+    # _DDL declares, with idx_wing_room / idx_source_file backing them.
+    _GROUPABLE = ("wing", "room", "source_file")
+
+    def count_by(self, field: str, where=None) -> dict:
+        """Server-side ``GROUP BY`` aggregation over a generated column.
+
+        Returns ``{value: count}`` for the given indexed column (``wing`` /
+        ``room`` / ``source_file``), counting rows per distinct value in MySQL
+        instead of streaming every row's metadata to the client. A NULL value
+        (drawer whose metadata lacks the field) is reported under the key
+        ``"unknown"`` to match mempalace's ``meta.get(field, "unknown")``
+        semantics. ``where`` is an optional chromadb-style filter (e.g.
+        ``{"wing": "claude_history"}`` to scope a room count to one wing); it is
+        translated through the same ``_where`` layer ``get``/``query`` use.
+
+        idx_wing_room makes ``GROUP BY wing`` (and ``GROUP BY room`` within a
+        wing) an index scan, so this is O(distinct values) on the wire instead
+        of O(rows) — the fix for list_wings timing out on a 487k-drawer palace.
+        """
+        if field not in self._GROUPABLE:
+            raise ValueError(
+                f"count_by: field {field!r} not groupable; expected one of {self._GROUPABLE}"
+            )
+        params: list = []
+        sql = f"SELECT `{field}` AS k, COUNT(*) AS n FROM `{self.name}`"
+        if where:
+            clause, wparams = _where.translate(where)
+            if clause:
+                sql += f" WHERE {clause}"
+                params.extend(wparams)
+        sql += f" GROUP BY `{field}`"
+        rows = self._pool.execute(sql, params, fetch=True) or []
+        return {(r["k"] if r["k"] is not None else "unknown"): int(r["n"]) for r in rows}
+
     def get(
         self,
         ids=None,
