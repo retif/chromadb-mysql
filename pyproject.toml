@@ -19,6 +19,9 @@ mysql = ["pymysql>=1.1"]
 embed = ["sentence-transformers>=2.2"]
 test = ["pytest>=7"]
 
+[project.entry-points."mempalace.backends"]
+mysql = "chromadb_mysql_backend.mempalace_backend:MySQLBackend"
+
 [tool.hatch.build.targets.wheel]
 # The backend implementation package, the runtime import-redirector, and the
 # .pth that auto-activates the redirector at interpreter startup.
