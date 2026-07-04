@@ -12,7 +12,10 @@ where/shape/switch logic). Validated against HeatWave in the conformance phase
 
 from __future__ import annotations
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 # One table per Chroma collection. metadata is JSON; wing/room/source_file are
 # generated columns purely to back indexes for the hot equality filters — the
@@ -33,7 +36,7 @@ CREATE TABLE IF NOT EXISTS `{table}` (
   source_file  VARCHAR(512) AS (JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.source_file'))) VIRTUAL,
   KEY idx_wing_room (wing, room),
   KEY idx_source_file (source_file(255))
-)
+){secondary}
 """
 
 
@@ -46,6 +49,12 @@ def config_from_env() -> dict:
         "user": os.environ.get("MEMPALACE_MYSQL_USER", "mempalace"),
         "password": os.environ.get("MEMPALACE_MYSQL_PASSWORD", ""),
         "database": os.environ.get("MEMPALACE_MYSQL_DB", "mempalace"),
+        # HeatWave acceleration: when set (e.g. "RAPID"), the drawer table is
+        # created with `SECONDARY_ENGINE = <value>` and loaded into HeatWave so
+        # VECTOR_DISTANCE offloads (16s InnoDB full-scan → sub-second). Unset =
+        # plain InnoDB (unit tests / non-HeatWave MySQL). Set by the Helm chart /
+        # HelmRelease per deployment — never baked into source. oleks/mempalace#16.
+        "secondary_engine": os.environ.get("MEMPALACE_MYSQL_SECONDARY_ENGINE", "").strip(),
     }
 
 
@@ -104,4 +113,29 @@ class Pool:
             conn.close()
 
     def ddl_create_table(self, table: str, dim: int) -> None:
-        self.execute(_DDL.format(table=table, dim=dim))
+        engine = self._cfg.get("secondary_engine") or ""
+        secondary = f" SECONDARY_ENGINE = {engine}" if engine else ""
+        self.execute(_DDL.format(table=table, dim=dim, secondary=secondary))
+        if engine:
+            self.ensure_secondary_loaded(table, engine)
+
+    def ensure_secondary_loaded(self, table: str, engine: str = "RAPID") -> None:
+        """Idempotently mark ``table`` for HeatWave and load it (oleks/mempalace#16).
+
+        Declares the acceleration in code rather than as a one-off manual
+        ``ALTER`` so it reproduces on every deploy / fresh palace. Tolerant by
+        design: ``SECONDARY_ENGINE`` re-assert is a no-op when already set,
+        ``SECONDARY_LOAD`` errors ("already loaded") are swallowed, and on a
+        non-HeatWave MySQL both simply fail and log — the table keeps working on
+        InnoDB. Also self-heals: a HeatWave restart that drops the in-memory
+        load is re-applied the next time the collection is opened. Change
+        propagation keeps new ``add`` rows in HeatWave after the initial load.
+        """
+        for sql in (
+            f"ALTER TABLE `{table}` SECONDARY_ENGINE = {engine}",
+            f"ALTER TABLE `{table}` SECONDARY_LOAD",
+        ):
+            try:
+                self.execute(sql)
+            except Exception as exc:  # already-loaded / non-HeatWave / no priv
+                logger.info("heatwave %s: %s", sql.split()[3].lower(), str(exc)[:140])
